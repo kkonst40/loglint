@@ -106,6 +106,10 @@ func isLogCall(pass *analysis.Pass, call *ast.CallExpr) bool {
 		return false
 	}
 
+	if pass.TypesInfo == nil {
+		return false
+	}
+
 	obj := pass.TypesInfo.ObjectOf(sel.Sel)
 	if obj == nil {
 		return false
