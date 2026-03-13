@@ -1,4 +1,4 @@
-package main
+package loglint
 
 import (
 	"github.com/kkonst40/loglint/internal/analyzer"
