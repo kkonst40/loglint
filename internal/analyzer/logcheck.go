@@ -127,7 +127,7 @@ func isLogCall(pass *analysis.Pass, call *ast.CallExpr) bool {
 	}
 
 	if pkg := obj.Pkg(); pkg != nil {
-		if pkg.Path() == "log/slog" {
+		if pkg.Path() == "log/slog" || pkg.Path() == "go.uber.org/zap" {
 			return isLoggingMethod(sel.Sel.Name)
 		}
 	}
