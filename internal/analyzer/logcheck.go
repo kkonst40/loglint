@@ -3,23 +3,41 @@ package analyzer
 import (
 	"go/ast"
 	"go/token"
-	"go/types"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 )
 
-var Analyzer = &analysis.Analyzer{
-	Name:     "loglint",
-	Doc:      "checks logging messages for style and security",
-	Run:      run,
-	Requires: []*analysis.Analyzer{inspect.Analyzer},
+type logLinter struct {
+	checkFirstChar       bool
+	checkNonEnglishChars bool
+	checkSpecialChars    bool
+	checkSensitiveWords  bool
+	sensitiveWords       []string
 }
 
-func run(pass *analysis.Pass) (any, error) {
+func New(checkFirstChar, checkNonEnglishChars, checkSpecialChars, checkSensitiveWords bool, sensitiveWords []string) *analysis.Analyzer {
+	l := &logLinter{
+		checkFirstChar:       checkFirstChar,
+		checkNonEnglishChars: checkNonEnglishChars,
+		checkSpecialChars:    checkSpecialChars,
+		checkSensitiveWords:  checkSensitiveWords,
+		sensitiveWords:       sensitiveWords,
+	}
+
+	analyzer := &analysis.Analyzer{
+		Name:     "loglint",
+		Doc:      "checks logging messages for style and security",
+		Run:      l.run,
+		Requires: []*analysis.Analyzer{inspect.Analyzer},
+	}
+
+	return analyzer
+}
+
+func (l *logLinter) run(pass *analysis.Pass) (any, error) {
 	for _, f := range pass.Files {
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
@@ -28,7 +46,7 @@ func run(pass *analysis.Pass) (any, error) {
 			}
 
 			if isLogCall(pass, call) {
-				checkLogMessage(pass, call)
+				l.checkLogMessage(pass, call)
 			}
 			return true
 		})
@@ -36,7 +54,7 @@ func run(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
-func checkLogMessage(pass *analysis.Pass, call *ast.CallExpr) {
+func (l *logLinter) checkLogMessage(pass *analysis.Pass, call *ast.CallExpr) {
 	if len(call.Args) == 0 {
 		return
 	}
@@ -46,41 +64,84 @@ func checkLogMessage(pass *analysis.Pass, call *ast.CallExpr) {
 	if lit, ok := firstArg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
 		msg := strings.Trim(lit.Value, "`\"")
 
-		// starts with small
-		if len(msg) > 0 && startsWithUpper(msg) {
-			pass.Reportf(lit.Pos(), "log message should start with a lowercase letter")
-			return
-		}
-
-		// english only
-		for _, r := range msg {
-			if unicode.IsLetter(r) && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
-				pass.Reportf(lit.Pos(), "log message contains non-english characters")
+		// starts with lowercase
+		if l.checkFirstChar {
+			if len(msg) > 0 && startsWithUpper(msg) {
+				reportWithSuggestedFix(
+					pass, lit,
+					"log message should start with a lowercase letter",
+					"make log message start with lowercase letter",
+					l.correctMsg(msg),
+				)
 				return
 			}
 		}
 
+		// english only
+		if l.checkNonEnglishChars {
+			for _, r := range msg {
+				if unicode.IsLetter(r) && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+					reportWithSuggestedFix(
+						pass, lit,
+						"log message contains non-english characters",
+						"make log message without non-english characters",
+						l.correctMsg(msg),
+					)
+
+					return
+				}
+			}
+		}
+
 		// invalid characters
-		for _, r := range msg {
-			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != ' ' {
-				pass.Reportf(lit.Pos(), "log message contains invalid characters: emoji or special symbols")
-				return
+		if l.checkSpecialChars {
+			for _, r := range msg {
+				if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != ' ' {
+					reportWithSuggestedFix(
+						pass, lit,
+						"log message contains invalid characters: emoji or special symbols",
+						"make log message without invalid characters",
+						l.correctMsg(msg),
+					)
+
+					return
+				}
 			}
 		}
 	}
 
 	// sensitive data
-	checkSensitiveData(pass, call)
+	if l.checkSensitiveWords {
+		l.checkSensitiveData(pass, call)
+	}
 }
 
-func startsWithUpper(s string) bool {
-	r, _ := utf8.DecodeRuneInString(s)
-	return unicode.IsUpper(r)
+func (l *logLinter) correctMsg(msg string) string {
+	newMsgRunes := []rune{}
+
+	for _, r := range msg {
+		if l.checkNonEnglishChars {
+			if unicode.IsLetter(r) && ((r > 'a' && r < 'z') || (r > 'A' && r < 'Z')) {
+				newMsgRunes = append(newMsgRunes, r)
+				continue
+			}
+		}
+
+		if l.checkSpecialChars {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) || r == ' ' {
+				newMsgRunes = append(newMsgRunes, r)
+			}
+		}
+	}
+
+	if l.checkFirstChar && unicode.IsUpper(newMsgRunes[0]) {
+		newMsgRunes[0] = unicode.ToLower(newMsgRunes[0])
+	}
+
+	return string(newMsgRunes)
 }
 
-var sensitiveWords = []string{"password", "pass", "token", "secret", "apikey", "api_key"}
-
-func checkSensitiveData(pass *analysis.Pass, call *ast.CallExpr) {
+func (l *logLinter) checkSensitiveData(pass *analysis.Pass, call *ast.CallExpr) {
 	for _, arg := range call.Args {
 		ast.Inspect(arg, func(n ast.Node) bool {
 			ident, ok := n.(*ast.Ident)
@@ -89,7 +150,7 @@ func checkSensitiveData(pass *analysis.Pass, call *ast.CallExpr) {
 			}
 
 			lowerName := strings.ToLower(ident.Name)
-			for _, word := range sensitiveWords {
+			for _, word := range l.sensitiveWords {
 				if strings.Contains(lowerName, word) {
 					pass.Reportf(ident.Pos(), "potential sensitive data leak in log: variable '%s'", ident.Name)
 					return false
@@ -98,56 +159,4 @@ func checkSensitiveData(pass *analysis.Pass, call *ast.CallExpr) {
 			return true
 		})
 	}
-}
-
-func isLogCall(pass *analysis.Pass, call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-
-	if pass.TypesInfo == nil {
-		return false
-	}
-
-	obj := pass.TypesInfo.ObjectOf(sel.Sel)
-	if obj == nil {
-		return false
-	}
-
-	sig, ok := obj.Type().(*types.Signature)
-	if !ok {
-		return false
-	}
-
-	if sig.Recv() != nil {
-		recvType := sig.Recv().Type().String()
-		if recvType == "*log/slog.Logger" {
-			return isLoggingMethod(sel.Sel.Name)
-		}
-		if recvType == "*go.uber.org/zap.Logger" || recvType == "*go.uber.org/zap.SugaredLogger" {
-			return isLoggingMethod(sel.Sel.Name)
-		}
-	}
-
-	if pkg := obj.Pkg(); pkg != nil {
-		if pkg.Path() == "log/slog" || pkg.Path() == "go.uber.org/zap" {
-			return isLoggingMethod(sel.Sel.Name)
-		}
-	}
-
-	return false
-}
-
-func isLoggingMethod(name string) bool {
-	switch name {
-	case "Info", "Infof", "Infow",
-		"Error", "Errorf", "Errorw",
-		"Warn", "Warnf", "Warnw",
-		"Debug", "Debugf", "Debugw",
-		"Fatal", "Fatalf", "Fatalw",
-		"Panic", "Panicf", "Panicw":
-		return true
-	}
-	return false
 }

@@ -8,5 +8,5 @@ import (
 
 func TestLogLint(t *testing.T) {
 	testdata := analysistest.TestData()
-	analysistest.Run(t, testdata, Analyzer, "a")
+	analysistest.Run(t, testdata, New(true, true, true, true, []string{"password", "pass", "token", "apikey", "api_key"}), "a")
 }
