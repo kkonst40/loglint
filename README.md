@@ -56,7 +56,7 @@ linters:
           sensitive_words: [password, pass, token, apikey, api_key]
 ```
 
-Значения каждого из параметров check_first_char, check_nonenglish_chars, check_special_chars, check_sensitive_words может быть изменен на false для отключения соответствующей проверки.
+Значения каждого из параметров check_first_char, check_nonenglish_chars, check_special_chars, check_sensitive_words могут быть изменены на false для отключения соответствующей проверки.
 В массив sensitive_words могут быть добавлены дополнительные слова, которые линтер будет считать как чувствительные.
 
 ### Сборка и запуск кастомного линтера
