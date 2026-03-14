@@ -31,7 +31,7 @@ name: loglint
 
 plugins:
   - module: github.com/kkonst40/loglint
-    version: v0.0.7
+    version: v0.0.8
 ```
 
 ### Настройка `.golangci.yml`
